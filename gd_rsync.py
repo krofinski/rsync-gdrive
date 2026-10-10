@@ -142,7 +142,27 @@ class GoogleDriveManager:
                         "Descarga el archivo 'credentials.json' (tipo Desktop App) desde Google Cloud Console."
                     )
 
+                # Verificar tipo de credencial en credentials.json
+                is_web_client = False
+                try:
+                    with open(self.credentials_path, "r", encoding="utf-8") as f:
+                        cred_info = json.load(f)
+                    if "web" in cred_info:
+                        is_web_client = True
+                        print("\n" + "!" * 70)
+                        print("AVISO: 'credentials.json' es de tipo 'Web application' (habitual en Nextcloud).")
+                        print("Google Cloud requiere credenciales de tipo 'Desktop application' (Aplicación de escritorio)")
+                        print("para scripts de consola. De lo contrario, Google suele rechazar la conexión con:")
+                        print("  '(invalid_grant) code_verifier or verifier is not needed.'")
+                        print("Ve a Google Cloud Console -> Credenciales -> Crear credenciales -> ID de OAuth -> Aplicación de escritorio.")
+                        print("!" * 70 + "\n")
+                except Exception:
+                    pass
+
                 flow = InstalledAppFlow.from_client_secrets_file(str(self.credentials_path), SCOPES)
+                if is_web_client and hasattr(flow, "autogenerate_code_verifier"):
+                    flow.autogenerate_code_verifier = False
+
                 print("\n" + "=" * 70)
                 print("AUTENTICACIÓN DE GOOGLE DRIVE REQUERIDA")
                 print("=" * 70)
@@ -160,10 +180,16 @@ class GoogleDriveManager:
                         success_message="¡Autenticación completada con éxito! Puedes cerrar esta ventana.",
                         open_browser=False,
                     )
-                except Exception as e:
-                    # Intento con puerto aleatorio si el especificado está en uso
-                    logging.warning(f"Error en puerto {self.port}: {e}. Intentando puerto automático...")
-                    creds = flow.run_local_server(prompt="consent", open_browser=False)
+                except OSError as err:
+                    if getattr(err, "errno", None) == 98 or "already in use" in str(err).lower():
+                        raise OSError(
+                            f"\nERROR: El puerto {self.port} ya está en uso en este servidor (probablemente por Nextcloud o un servidor web).\n"
+                            f"Solución: Ejecuta el script especificando otro puerto con --port, por ejemplo:\n"
+                            f"    python gd_rsync.py --auth --port 8090\n"
+                            f"Y abre el túnel SSH correspondiente desde tu ordenador:\n"
+                            f"    ssh -L 8090:localhost:8090 usuario@tu-servidor\n"
+                        ) from err
+                    raise
 
                 # Asegurar directorio y guardar token
                 self.token_path.parent.mkdir(parents=True, exist_ok=True)
