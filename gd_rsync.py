@@ -161,39 +161,31 @@ class GoogleDriveManager:
 
                 flow = InstalledAppFlow.from_client_secrets_file(str(self.credentials_path), SCOPES)
 
-                # Parche de compatibilidad para clientes de tipo "Web application" (comunes en Nextcloud)
+                # Parche: Google Cloud rechaza PKCE (code_verifier / code_challenge)
+                # cuando el cliente OAuth de escritorio/web ya autentica mediante client_secret.
+                # Desactivamos PKCE para evitar el error: "(invalid_grant) code_verifier or verifier is not needed."
+                if hasattr(flow, "autogenerate_code_verifier"):
+                    flow.autogenerate_code_verifier = False
+
                 orig_auth_url = flow.authorization_url
                 orig_fetch_token = flow.fetch_token
 
                 def patched_auth_url(**kwargs):
-                    if is_web_client:
-                        kwargs.pop("code_challenge", None)
-                        kwargs.pop("code_challenge_method", None)
+                    kwargs.pop("code_challenge", None)
+                    kwargs.pop("code_challenge_method", None)
                     url, state = orig_auth_url(**kwargs)
-                    if is_web_client and hasattr(flow, "oauth2session"):
+                    if hasattr(flow, "oauth2session"):
                         flow.oauth2session.code_verifier = None
                     return url, state
 
                 def patched_fetch_token(*args, **kwargs):
-                    if is_web_client:
-                        if hasattr(flow, "oauth2session"):
-                            flow.oauth2session.code_verifier = None
-                        kwargs.pop("code_verifier", None)
-                    try:
-                        return orig_fetch_token(*args, **kwargs)
-                    except Exception as err:
-                        if "code_verifier" in str(err).lower() and "not needed" in str(err).lower():
-                            logging.info("Google rechazó code_verifier; reintentando intercambio sin PKCE...")
-                            if hasattr(flow, "oauth2session"):
-                                flow.oauth2session.code_verifier = None
-                            kwargs.pop("code_verifier", None)
-                            return orig_fetch_token(*args, **kwargs)
-                        raise
+                    if hasattr(flow, "oauth2session"):
+                        flow.oauth2session.code_verifier = None
+                    kwargs.pop("code_verifier", None)
+                    return orig_fetch_token(*args, **kwargs)
 
                 flow.authorization_url = patched_auth_url
                 flow.fetch_token = patched_fetch_token
-                if is_web_client and hasattr(flow, "autogenerate_code_verifier"):
-                    flow.autogenerate_code_verifier = False
 
                 print("\n" + "=" * 70)
                 print("AUTENTICACIÓN DE GOOGLE DRIVE REQUERIDA")
