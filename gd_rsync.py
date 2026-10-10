@@ -160,6 +160,38 @@ class GoogleDriveManager:
                     pass
 
                 flow = InstalledAppFlow.from_client_secrets_file(str(self.credentials_path), SCOPES)
+
+                # Parche de compatibilidad para clientes de tipo "Web application" (comunes en Nextcloud)
+                orig_auth_url = flow.authorization_url
+                orig_fetch_token = flow.fetch_token
+
+                def patched_auth_url(**kwargs):
+                    if is_web_client:
+                        kwargs.pop("code_challenge", None)
+                        kwargs.pop("code_challenge_method", None)
+                    url, state = orig_auth_url(**kwargs)
+                    if is_web_client and hasattr(flow, "oauth2session"):
+                        flow.oauth2session.code_verifier = None
+                    return url, state
+
+                def patched_fetch_token(*args, **kwargs):
+                    if is_web_client:
+                        if hasattr(flow, "oauth2session"):
+                            flow.oauth2session.code_verifier = None
+                        kwargs.pop("code_verifier", None)
+                    try:
+                        return orig_fetch_token(*args, **kwargs)
+                    except Exception as err:
+                        if "code_verifier" in str(err).lower() and "not needed" in str(err).lower():
+                            logging.info("Google rechazó code_verifier; reintentando intercambio sin PKCE...")
+                            if hasattr(flow, "oauth2session"):
+                                flow.oauth2session.code_verifier = None
+                            kwargs.pop("code_verifier", None)
+                            return orig_fetch_token(*args, **kwargs)
+                        raise
+
+                flow.authorization_url = patched_auth_url
+                flow.fetch_token = patched_fetch_token
                 if is_web_client and hasattr(flow, "autogenerate_code_verifier"):
                     flow.autogenerate_code_verifier = False
 
