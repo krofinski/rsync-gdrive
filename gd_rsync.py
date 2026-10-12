@@ -444,6 +444,135 @@ class GoogleDriveManager:
             retry_api_call(lambda: self.service.files().delete(fileId=file_id).execute())
             logging.info(f"Eliminado permanente en Drive: {name}")
 
+    def calculate_disk_usage(self, drive_path: str = "") -> Dict:
+        """
+        Calcula recursivamente el espacio total ocupado en una carpeta de Google Drive,
+        contando archivos, subcarpetas y desglose por subdirectorios principales.
+        """
+        cleaned_path = drive_path.strip().replace("\\", "/").lstrip("/")
+        if cleaned_path.startswith("gdrive:"):
+            cleaned_path = cleaned_path[len("gdrive:"):].lstrip("/")
+        elif cleaned_path.startswith("gd:"):
+            cleaned_path = cleaned_path[len("gd:"):].lstrip("/")
+
+        folder_id = self.resolve_path_to_folder_id(cleaned_path, create_if_missing=False)
+        display_path = f"gdrive:/{cleaned_path}" if cleaned_path else "gdrive:/"
+
+        print(f"Calculando espacio ocupado en '{display_path}'...")
+        total_bytes = 0
+        total_files = 0
+        total_folders = 0
+        subfolder_breakdown: Dict[str, Dict[str, int]] = {}
+
+        # Cola para BFS: (folder_id, top_level_subfolder_name_or_None)
+        queue = [(folder_id, None)]
+
+        while queue:
+            current_id, top_subfolder = queue.pop(0)
+            page_token = None
+
+            while True:
+                query = f"'{current_id}' in parents and trashed = false"
+                response = retry_api_call(
+                    lambda: self.service.files().list(
+                        q=query,
+                        spaces="drive",
+                        fields="nextPageToken, files(id, name, mimeType, size)",
+                        pageSize=1000,
+                        pageToken=page_token
+                    ).execute()
+                )
+
+                for item in response.get("files", []):
+                    is_dir = (item.get("mimeType") == FOLDER_MIME)
+                    name = item.get("name", "")
+                    size = int(item.get("size", 0)) if not is_dir else 0
+
+                    if is_dir:
+                        total_folders += 1
+                        sub_name = top_subfolder if top_subfolder is not None else name
+                        if top_subfolder is None and sub_name not in subfolder_breakdown:
+                            subfolder_breakdown[sub_name] = {"bytes": 0, "files": 0}
+                        queue.append((item["id"], sub_name))
+                    else:
+                        total_files += 1
+                        total_bytes += size
+                        if top_subfolder:
+                            if top_subfolder not in subfolder_breakdown:
+                                subfolder_breakdown[top_subfolder] = {"bytes": 0, "files": 0}
+                            subfolder_breakdown[top_subfolder]["bytes"] += size
+                            subfolder_breakdown[top_subfolder]["files"] += 1
+
+                sys.stdout.write(f"\r  Analizando... {total_files:,} archivos ({format_bytes(total_bytes)})")
+                sys.stdout.flush()
+
+                page_token = response.get("nextPageToken")
+                if not page_token:
+                    break
+
+        sys.stdout.write("\r" + " " * 70 + "\r")
+        sys.stdout.flush()
+
+        # Obtener información de cuota global de la cuenta si está disponible
+        quota_info = {}
+        try:
+            about = retry_api_call(lambda: self.service.about().get(fields="storageQuota").execute())
+            quota_info = about.get("storageQuota", {})
+        except Exception as e:
+            logging.debug(f"No se pudo consultar cuota global de la cuenta: {e}")
+
+        return {
+            "path": display_path,
+            "total_bytes": total_bytes,
+            "total_files": total_files,
+            "total_folders": total_folders,
+            "subfolders": subfolder_breakdown,
+            "quota": quota_info
+        }
+
+    def print_disk_usage(self, drive_path: str = ""):
+        """Imprime un reporte formateado del espacio ocupado en la ruta de Google Drive."""
+        usage = self.calculate_disk_usage(drive_path)
+
+        print("\n" + "=" * 65)
+        print("ESPACIO OCUPADO EN GOOGLE DRIVE")
+        print("=" * 65)
+        print(f"Ruta analizada:         {usage['path']}")
+        print(f"Espacio total ocupado:  {format_bytes(usage['total_bytes'])} ({usage['total_bytes']:,} bytes)")
+        print(f"Total de archivos:      {usage['total_files']:,}")
+        print(f"Total de carpetas:      {usage['total_folders']:,}")
+
+        # Mostrar desglose de subcarpetas principales si existen
+        subfolders = usage.get("subfolders", {})
+        if subfolders:
+            print("\nDesglose de subdirectorios directos:")
+            sorted_subs = sorted(subfolders.items(), key=lambda x: x[1]["bytes"], reverse=True)
+            for sub_name, data in sorted_subs[:15]:
+                print(f"  • /{sub_name:<28} {format_bytes(data['bytes']):>10}  ({data['files']:,} archivos)")
+            if len(sorted_subs) > 15:
+                print(f"  ... y {len(sorted_subs) - 15} carpetas más.")
+
+        # Mostrar información de cuota global si existe
+        quota = usage.get("quota", {})
+        if quota:
+            print("\nCuota de almacenamiento en tu cuenta de Google:")
+            limit = int(quota.get("limit", 0))
+            usage_total = int(quota.get("usage", 0))
+            usage_drive = int(quota.get("usageInDrive", 0))
+            usage_trash = int(quota.get("usageInDriveTrash", 0))
+
+            if usage_drive > 0:
+                print(f"  • Usado en Google Drive:  {format_bytes(usage_drive)}")
+            if usage_trash > 0:
+                print(f"  • En papelera de Drive:   {format_bytes(usage_trash)}")
+            if limit > 0:
+                pct = (usage_total / limit) * 100
+                print(f"  • Total cuenta de Google: {format_bytes(usage_total)} / {format_bytes(limit)} ({pct:.1f}%)")
+            elif usage_total > 0:
+                print(f"  • Total cuenta de Google: {format_bytes(usage_total)} (Plan ilimitado)")
+
+        print("=" * 65 + "\n")
+
 
 class LocalManager:
     """Gestor de operaciones sobre el sistema de archivos local."""
@@ -862,6 +991,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Al eliminar en Google Drive, mover a la papelera en vez de borrado definitivo")
     parser.add_argument("--exclude", action="append", default=[],
                         help="Excluir archivos o carpetas que coincidan con el patrón (ej: '*.tmp', '.git')")
+    parser.add_argument("-s", "--size", "--du", nargs="?", const="__DEFAULT__", default=None,
+                        metavar="RUTA",
+                        help="Calcula y muestra el espacio ocupado en un directorio de Google Drive\n"
+                             "(ej: --size gdrive:/backups o pasando la ruta como argumento)")
 
     # Opciones de autenticación y configuración
     auth_group = parser.add_argument_group("Opciones de Autenticación de Google Drive")
@@ -917,10 +1050,21 @@ def main():
         print("¡Autenticación completada con éxito!")
         sys.exit(0)
 
+    # Modo cálculo de espacio ocupado en Google Drive (--size / --du / -s)
+    if args.size is not None:
+        target = args.size if args.size != "__DEFAULT__" else (args.src if args.src else "gdrive:/")
+        gd_manager.authenticate()
+        try:
+            gd_manager.print_disk_usage(target)
+        except Exception as err:
+            logging.critical(f"Error calculando espacio ocupado: {err}", exc_info=args.verbose)
+            sys.exit(1)
+        sys.exit(0)
+
     # Validar argumentos posicionales
     if not args.src or not args.dest:
         parser.print_help()
-        print("\nERROR: Debes especificar tanto ORIGEN como DESTINO (o usar --auth para iniciar sesión).", file=sys.stderr)
+        print("\nERROR: Debes especificar tanto ORIGEN como DESTINO (o usar --auth para iniciar sesión, o --size para consultar espacio).", file=sys.stderr)
         sys.exit(1)
 
     # Autenticar antes de iniciar la sincronización
