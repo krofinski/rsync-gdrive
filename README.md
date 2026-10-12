@@ -176,6 +176,20 @@ python3 gd_rsync.py -av \
 python3 gd_rsync.py -av gdrive:/backups/www/ /var/www/
 ```
 
+### 7. Consultar espacio ocupado en Google Drive (`--size` / `--du` / `-s`)
+Calcula y muestra únicamente el espacio total ocupado en una carpeta de Google Drive o en la raíz de la unidad, sin realizar transferencias. Incluye conteo de archivos, subcarpetas y resumen de cuota global:
+
+```bash
+# Consultar el espacio de una carpeta específica:
+python3 gd_rsync.py --size gdrive:/backups/www/
+
+# O usando el alias estilo unix 'du':
+python3 gd_rsync.py --du gdrive:/backups/
+
+# Consultar el espacio de todo tu Google Drive:
+python3 gd_rsync.py --size
+```
+
 ---
 
 ## 6. Automatización periódica con Cron
@@ -205,6 +219,7 @@ crontab -e
 | `-n`, `--dry-run` | `-n` | Simula la sincronización sin realizar cambios reales. |
 | `-v`, `--verbose` | `-v` | Muestra salida detallada del proceso. |
 | `-q`, `--quiet` | `-q` | Modo silencioso (ideal para scripts en cron). |
+| `-s`, `--size`, `--du [RUTA]`| `du -sh` | Calcula y muestra el espacio ocupado y conteo de archivos en Google Drive. |
 | `--delete` | `--delete` | Elimina elementos en destino que no existan en el origen. |
 | `--trash` | *(Específico)* | Al eliminar en Google Drive, envía a la papelera en vez de borrado definitivo. |
 | `--exclude PATRON`| `--exclude` | Omite archivos o carpetas que coincidan con el patrón glob. |
@@ -212,3 +227,4 @@ crontab -e
 | `--credentials RUTA`| *(Específico)* | Ruta a `credentials.json` (por defecto busca en local o `~/.config/gd-rsync/`). |
 | `--token RUTA` | *(Específico)* | Ruta a `token.json` guardado. |
 | `--auth` | *(Específico)* | Ejecuta exclusivamente el flujo interactivo de autenticación OAuth. |
+
