@@ -1,0 +1,11 @@
+# Set default behavior to force LF line endings
+* text=auto eol=lf
+
+# Explicitly declare text files you want to always be normalized to LF
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+*.sh text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
